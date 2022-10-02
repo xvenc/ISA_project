@@ -11,6 +11,7 @@ typedef struct {
     int flow_cache = 1024;                      // variable to store flow cache size
 } arguments_t;
 
+char errbuf[PCAP_ERRBUF_SIZE];
 
 // function that prints message to stderr and exits with given ret code
 void my_exit(std::string msg, int ret_code) {
@@ -30,6 +31,11 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 		
 		if (c == 'f') {
             args->file = optarg;   
+			if (FILE *file = fopen(args->file.c_str(), "r")) {
+				fclose(file);
+			} else {
+				my_exit("File doesn't exist\n", 1);
+			}   
 			
 		} else if (c == 'c') {
             args->collector = optarg;
@@ -39,7 +45,7 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 			
 			args->a_timer = (u_int16_t)strtol(optarg,&ptr, 10);
 			if (*ptr != '\0') {
-				my_exit("Wrong port number\n",1);	
+				my_exit("Wrong active timer time\n",1);	
 			}
 
         } else if (c == 'i') {
@@ -47,7 +53,7 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 			
 			args->seconds = (u_int16_t)strtol(optarg,&ptr, 10);
 			if (*ptr != '\0') {
-				my_exit("Wrong port number\n",1);	
+				my_exit("Wrong inactive timer time\n",1);	
 			}
 
         } else if (c == 'm') {
@@ -55,7 +61,7 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 			
 			args->flow_cache = (u_int16_t)strtol(optarg,&ptr, 10);
 			if (*ptr != '\0') {
-				my_exit("Wrong port number\n",1);	
+				my_exit("Wrong flow-cache size\n",1);	
             }
 	
         }else if (c == '?') my_exit("Wrong program argument\n", EXIT_FAILURE);
@@ -63,16 +69,37 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 	}
 }
 
+void process_packet(u_char *args,const struct pcap_pkthdr *packet_header, const u_char* packet) {
+	// need to be here to supress the warning
+	(void)args;
+	(void)packet;
+	int len = (int)packet_header->len;
+	std::cout << len << std::endl;
+}
+
 
 int main(int argc, char **argv){
 
     arguments_t args;
-    parse_arguments(argc, argv, &args);
-//    std::cout << "FILE: " + args.file << std::endl;
-//    std::cout << "Colector: " + args.collector << std::endl;
-//    std::cout << "active: " << args.a_timer << std::endl;
-//    std::cout << "seconds: " << args.seconds << std::endl;
-//    std::cout << "count: " << args.flow_cache << std::endl;
+	pcap_t *handle; // Packet handle returned from pcap_open_offline
+	//struct pcap_pkthdr header; // The header that pcap gives us 
 
+    parse_arguments(argc, argv, &args);
+
+	if (args.file != "") {
+		// read from file
+		handle = pcap_open_offline(args.file.c_str(), errbuf);
+	} else {
+		// read from stdin
+		handle = pcap_open_offline("-", errbuf);
+	}
+
+	// main loop to read all packets from a pcap
+	if (pcap_loop(handle, -1, process_packet, 0) == -1) {
+		pcap_close(handle);
+		my_exit("Pcap_loop failed", 1);
+	}
+
+	pcap_close(handle);
     return 0;
 }
