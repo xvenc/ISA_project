@@ -28,6 +28,7 @@ typedef struct {
     int a_timer = 60; 			                // variable to store interval in seconds, netflow export
 	int seconds = 10;           	            // variable to store interval in seconds
     int flow_cache = 1024;                      // variable to store flow cache size
+	int flow_seq;								// variable to store info about how many flows were seen
 } arguments_t;
 
 
@@ -166,7 +167,11 @@ void create_flow_header();
 
 // TODO sent flow
 
-void send_flow();
+void send_flow(std::list<nf_v5_packet_t> &flow_cache) {
+
+	flow_cache.pop_front();
+	std::cout << "Packet exported, size now: " << flow_cache.size() << std::endl;
+}
 
 void process_tcp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
 	struct ip *ipv4_h = (struct ip*)(packet + ETHER_SIZE);
@@ -233,6 +238,10 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 		} else {
 			std::cerr << "Something else than IPv4 was in the pcap file" << std::endl;
 		}
+	}
+
+	if (flow_cache.size() == (long unsigned int)arguments->flow_cache) {
+		send_flow(flow_cache);
 	}
 
 	//print_flow(flow_cache);
