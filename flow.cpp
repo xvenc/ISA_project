@@ -134,19 +134,14 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 
 void print_flow(std::list<nf_v5_packet_t> &flow_cache) {
 	std::list<nf_v5_packet_t>::iterator it;
-	std::cout << "src ip\tdst_ip\tsrc_port\tdst_port\tprotocol" << std::endl;
+	//std::cout << "src ip\tdst_ip\tsrc_port\tdst_port\tprotocol" << std::endl;
     for (it = flow_cache.begin(); it != flow_cache.end(); ++it) {
-		std::cout << inet_ntoa(it->body.src_ip) << std::endl;
+		std::cout << "bytes:\t" << it->body.num_bytes << " n_of_packet: " << it->body.num_packets << std::endl;
 	}
-	std::cout << "\n" << std::endl;
+	std::cout << "--------------------------------------------------\n";
 }
 
-int check_flow(std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t flow) {
-
-	if (flow_cache.empty()) {
-		flow_cache.push_back(flow);
-		return 0;
-	}
+void check_flow(std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t flow) {
 
 	std::list<nf_v5_packet_t>::iterator it;
     for (it = flow_cache.begin(); it != flow_cache.end(); ++it) {
@@ -154,53 +149,51 @@ int check_flow(std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t flow) {
 			&& (it->body.src_port == flow.body.src_port) && (it->body.dst_port == flow.body.dst_port) &&
 			(it->body.protocol == flow.body.protocol)) {
 				// already in cache
-				// TODO increase dOctetns, packets in flow and do OR of tcp flags
-				return 1;
+				it->body.num_packets++;
+				it->body.num_bytes += flow.body.num_bytes;
+				it->body.tcp_flags |= flow.body.tcp_flags;
+				return;
 		}
-			
 	}
+	// flow is new so I set the number of packets to 1
+	flow.body.num_packets = 1;
 	flow_cache.push_back(flow);
-	return 0;
+	return;
 }
 
-void process_tcp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache) {
+// TODO create flow header when I need to send the packet
+void create_flow_header();
+
+// TODO sent flow
+
+void send_flow();
+
+void process_tcp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
 	struct ip *ipv4_h = (struct ip*)(packet + ETHER_SIZE);
 	struct tcphdr *tcp = (struct tcphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
-	nf_v5_packet_t v5_packet;
-	v5_packet.body.src_ip = ipv4_h->ip_src;
-	v5_packet.body.dst_ip = ipv4_h->ip_dst;
-	v5_packet.body.src_port = tcp->th_sport;
-	v5_packet.body.dst_port = tcp->th_dport;
-	v5_packet.body.protocol = TCP_PROTO_N;
-	int res = check_flow(flow_cache, v5_packet);
-
+	tmp_flow->body.src_port = tcp->th_sport;
+	tmp_flow->body.dst_port = tcp->th_dport;
+	tmp_flow->body.protocol = TCP_PROTO_N;
+	tmp_flow->body.tcp_flags = tcp->th_flags;
+	check_flow(flow_cache, *tmp_flow);
 
 }
 
-void process_udp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache) {
+void process_udp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
 
 	struct ip *ipv4_h = (struct ip*)(packet + ETHER_SIZE);
 	struct udphdr *udp_h = (struct udphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
-	nf_v5_packet_t v5_packet;
-	v5_packet.body.src_ip = ipv4_h->ip_src;
-	v5_packet.body.dst_ip = ipv4_h->ip_dst;
-	v5_packet.body.src_port = udp_h->uh_sport;
-	v5_packet.body.dst_port = udp_h->uh_dport;
-	v5_packet.body.protocol = UDP_PROTO_N;
-	int res = check_flow(flow_cache, v5_packet);
+	tmp_flow->body.src_port = udp_h->uh_sport;
+	tmp_flow->body.dst_port = udp_h->uh_dport;
+	tmp_flow->body.protocol = UDP_PROTO_N;
+	check_flow(flow_cache, *tmp_flow);
 
 }
 
-void process_icmp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache) {
+void process_icmp(std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
 
-	struct ip *ipv4_h = (struct ip*)(packet + ETHER_SIZE);
-	nf_v5_packet_t v5_packet;
-	v5_packet.body.src_ip = ipv4_h->ip_src;
-	v5_packet.body.dst_ip = ipv4_h->ip_dst;
-	v5_packet.body.src_port = 0;
-	v5_packet.body.dst_port = 0;
-	v5_packet.body.protocol = ICMP_PROTO_N;
-	int res = check_flow(flow_cache, v5_packet);
+	tmp_flow->body.protocol = ICMP_PROTO_N;
+	check_flow(flow_cache, *tmp_flow);
 
 }
 
@@ -208,38 +201,41 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 	struct ether_header* eth_h; 		// structure for ethernet frame
 	struct ip* ipv4_h; 					// struct for ipv4 frame
 
-
-	static std::list<nf_v5_packet_t> flow_cache;
-
-	arguments_t *arguments = (arguments_t*)args;
+	static std::list<nf_v5_packet_t> flow_cache; //flow_cache
+	arguments_t *arguments = (arguments_t*)args; //program arguments
+	nf_v5_packet_t flow_tmp = {}; // temporary flow that will be inicialized
 	
-
-	int len = (int)packet_header->len;
-	(void)len;
 	eth_h = (struct ether_header*)(packet);
+	ipv4_h = (struct ip*)(packet + ETHER_SIZE);
+
+	// set information about flow that I can get from ip header
+	flow_tmp.body.num_bytes = (int)packet_header->len - sizeof(struct ether_header);
+	flow_tmp.body.src_ip = ipv4_h->ip_src;
+	flow_tmp.body.dst_ip = ipv4_h->ip_dst;
+	flow_tmp.body.tos = ipv4_h->ip_tos;
+	// TODO first and last time of packet of the flow
 
 	if (ntohs(eth_h->ether_type) == ETHERTYPE_IP) {
 
-		ipv4_h = (struct ip*)(packet + ETHER_SIZE);
-
 		if (ipv4_h->ip_p == TCP_PROTO_N) {
 			// TCP
-			process_tcp(packet, flow_cache);
+			process_tcp(packet, flow_cache, &flow_tmp);
 			//std::cout << "TCP " << flow_cache.size() << std::endl;
 		} else if (ipv4_h->ip_p == UDP_PROTO_N) {
 			// UDP
-			process_udp(packet, flow_cache);
+			process_udp(packet, flow_cache, &flow_tmp);
 			//std::cout << "UDP " << flow_cache.size() << std::endl;
 
 		} else if (ipv4_h->ip_p == ICMP_PROTO_N) {
-			process_icmp(packet,flow_cache);
+			process_icmp(flow_cache, &flow_tmp);
 			//std::cout << "ICMP " << flow_cache.size() << std::endl;
 	
 		} else {
 			std::cerr << "Something else than IPv4 was in the pcap file" << std::endl;
 		}
 	}
-	
+
+	//print_flow(flow_cache);
 }
 
 
