@@ -20,17 +20,6 @@
 #define UDP_PROTO_N 17
 #define ICMP_PROTO_N 1
 
-// structure for program arguments
-typedef struct {
-	std::string file = ""; 			            // variable to store file name
-	std::string collector = "127.0.0.1";   		// variable to store domane name for collector 
-	int port = 2055;							// variable to store port number
-    int a_timer = 60; 			                // variable to store interval in seconds, netflow export
-	int seconds = 10;           	            // variable to store interval in seconds
-    int flow_cache = 1024;                      // variable to store flow cache size
-	int flow_seq;								// variable to store info about how many flows were seen
-} arguments_t;
-
 
 typedef struct {
 	uint16_t version;		// bytes 0-1
@@ -67,11 +56,20 @@ typedef struct {
 	uint16_t end_pad;       // bytes 46-47: zero pad 
 }__attribute__((packed)) nf_v5_body_t;
 
+// structure for program arguments
 typedef struct {
-	nf_v5_header_t header;
-	nf_v5_body_t body;
+	std::string file = ""; 			            // variable to store file name
+	std::string collector = "127.0.0.1";   		// variable to store domane name for collector 
+	unsigned int port = 2055;							// variable to store port number
+    int a_timer = 60; 			                // variable to store interval in seconds, netflow export
+	int seconds = 10;           	            // variable to store interval in seconds
+    int flow_cache_size = 1024;                 // variable to store flow cache size
+	int flow_seq;								// variable to store info about how many flows were seen
+	std::list<nf_v5_body_t> flow_cache; 		// variable to represent the flow cache
+	uint32_t currect_time;
+	uint32_t first_packet_time;
+} arguments_t;
 
-} nf_v5_packet_t;
 
 char errbuf[PCAP_ERRBUF_SIZE];
 
@@ -122,7 +120,7 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
         } else if (c == 'm') {
             if (optarg[0] == '-') my_exit("Invalid argument", EXIT_FAILURE);
 			
-			args->flow_cache = (u_int16_t)strtol(optarg,&ptr, 10);
+			args->flow_cache_size = (u_int16_t)strtol(optarg,&ptr, 10);
 			if (*ptr != '\0') {
 				my_exit("Wrong flow-cache size\n",1);	
             }
@@ -132,128 +130,164 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 	}
 }
 
-
-void print_flow(std::list<nf_v5_packet_t> &flow_cache) {
-	std::list<nf_v5_packet_t>::iterator it;
+// help function TODO delete later
+void print_flow(std::list<nf_v5_body_t> &flow_cache) {
+	std::list<nf_v5_body_t>::iterator it;
 	//std::cout << "src ip\tdst_ip\tsrc_port\tdst_port\tprotocol" << std::endl;
     for (it = flow_cache.begin(); it != flow_cache.end(); ++it) {
-		std::cout << "bytes:\t" << it->body.num_bytes << " n_of_packet: " << it->body.num_packets << std::endl;
+		std::cout << "bytes:\t" << it->num_bytes << " n_of_packet: " << it->num_packets << std::endl;
 	}
 	std::cout << "--------------------------------------------------\n";
-}
-
-void check_flow(std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t flow) {
-
-	std::list<nf_v5_packet_t>::iterator it;
-    for (it = flow_cache.begin(); it != flow_cache.end(); ++it) {
-		if ((it->body.src_ip.s_addr == flow.body.src_ip.s_addr) && (it->body.dst_ip.s_addr == flow.body.dst_ip.s_addr)
-			&& (it->body.src_port == flow.body.src_port) && (it->body.dst_port == flow.body.dst_port) &&
-			(it->body.protocol == flow.body.protocol)) {
-				// already in cache
-				it->body.num_packets++;
-				it->body.num_bytes += flow.body.num_bytes;
-				it->body.tcp_flags |= flow.body.tcp_flags;
-				return;
-		}
+	if (flow_cache.empty()) {
+		std::cout << "flow cache is empty" << std::endl;
 	}
-	// flow is new so I set the number of packets to 1
-	flow.body.num_packets = 1;
-	flow_cache.push_back(flow);
-	return;
 }
 
 // TODO create flow header when I need to send the packet
 void create_flow_header();
 
 // TODO sent flow
+void send_flow(std::list<nf_v5_body_t> &flow_cache) {
 
-void send_flow(std::list<nf_v5_packet_t> &flow_cache) {
-
+	//nf_v5_body_t flow_to_send = flow_cache.front();
 	flow_cache.pop_front();
-	std::cout << "Packet exported, size now: " << flow_cache.size() << std::endl;
+	std::cout << "Flow exported, size now: " << flow_cache.size() << std::endl;
 }
 
-void process_tcp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
-	struct ip *ipv4_h = (struct ip*)(packet + ETHER_SIZE);
-	struct tcphdr *tcp = (struct tcphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
-	tmp_flow->body.src_port = tcp->th_sport;
-	tmp_flow->body.dst_port = tcp->th_dport;
-	tmp_flow->body.protocol = TCP_PROTO_N;
-	tmp_flow->body.tcp_flags = tcp->th_flags;
-	check_flow(flow_cache, *tmp_flow);
+void send_all_flows(std::list<nf_v5_body_t> &flow_cache) {
+
+	std::cout << "Exporting " << flow_cache.size() << " flows" << std::endl;
+	while (!flow_cache.empty()) {
+		flow_cache.pop_front();
+		std::cout << "Flow exported, size now: " << flow_cache.size() << std::endl;
+	}
+}
+
+int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
+
+	// check if flow is present
+	std::list<nf_v5_body_t>::iterator it;
+    for (it = args->flow_cache.begin(); it != args->flow_cache.end(); ++it) {
+		if ((it->src_ip.s_addr == flow->src_ip.s_addr) && (it->dst_ip.s_addr == flow->dst_ip.s_addr)
+			&& (it->src_port == flow->src_port) && (it->dst_port == flow->dst_port) &&
+			(it->protocol == flow->protocol)) {
+				// already in cache
+				it->num_packets++;
+				it->num_bytes += flow->num_bytes;
+				it->tcp_flags |= flow->tcp_flags;
+				it->last = flow->last;
+				return 0;
+		}
+	}
+
+
+	// flow is in the cache
+	return 1;
+}
+
+void add_flow(arguments_t *args, nf_v5_body_t* flow) {
+
+	// check if flow isn't full
+	if (args->flow_cache.size() == (long unsigned int)args->flow_cache_size) {
+		send_flow(args->flow_cache);
+	}
+	// flow is new so I set the number of packets to 1 and add the flow
+	flow->num_packets = 1;
+	// TODO first and last time of packet
+	flow->first = args->first_packet_time - args->currect_time;
+	flow->last = args->first_packet_time - args->currect_time;
+	args->flow_cache.push_back(*flow);
+}
+
+
+void process_flow(arguments_t *args, nf_v5_body_t *tmp_flow) {
+
+	// TODO check inactive a active timer
+
+	// check if flow is not in the cache then add it
+	if (check_flow_exists(args, tmp_flow)) {
+		add_flow(args, tmp_flow);
+	}
+
 
 }
 
-void process_udp(const u_char *packet, std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
+void get_tcp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
 
-	struct ip *ipv4_h = (struct ip*)(packet + ETHER_SIZE);
-	struct udphdr *udp_h = (struct udphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
-	tmp_flow->body.src_port = udp_h->uh_sport;
-	tmp_flow->body.dst_port = udp_h->uh_dport;
-	tmp_flow->body.protocol = UDP_PROTO_N;
-	check_flow(flow_cache, *tmp_flow);
+	struct tcphdr *tcp = (struct tcphdr*)(packet);
+	tmp_flow->src_port = tcp->th_sport;
+	tmp_flow->dst_port = tcp->th_dport;
+	tmp_flow->protocol = TCP_PROTO_N;
+	tmp_flow->tcp_flags = tcp->th_flags;
 
 }
 
-void process_icmp(std::list<nf_v5_packet_t> &flow_cache, nf_v5_packet_t* tmp_flow) {
+void get_udp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
 
-	tmp_flow->body.protocol = ICMP_PROTO_N;
-	check_flow(flow_cache, *tmp_flow);
+	struct udphdr *udp_h = (struct udphdr*)(packet);
+	tmp_flow->src_port = udp_h->uh_sport;
+	tmp_flow->dst_port = udp_h->uh_dport;
+	tmp_flow->protocol = UDP_PROTO_N;
 
 }
 
 void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const u_char* packet) {
 	struct ether_header* eth_h; 		// structure for ethernet frame
 	struct ip* ipv4_h; 					// struct for ipv4 frame
+	struct udphdr *udp_h;
+	struct tcphdr *tcp_h;
 
-	static std::list<nf_v5_packet_t> flow_cache; //flow_cache
-	arguments_t *arguments = (arguments_t*)args; //program arguments
-	nf_v5_packet_t flow_tmp = {}; // temporary flow that will be inicialized
+	arguments_t *arg = (arguments_t*)args; //program arguments
+	nf_v5_body_t flow_tmp = {}; // temporary flow that will be inicialized
 	
+	if (arg->first_packet_time == 0) {
+		arg->first_packet_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
+	}
+	arg->currect_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
+
 	eth_h = (struct ether_header*)(packet);
 	ipv4_h = (struct ip*)(packet + ETHER_SIZE);
+	udp_h = (struct udphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
+	tcp_h = (struct tcphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
 
 	// set information about flow that I can get from ip header
-	flow_tmp.body.num_bytes = (int)packet_header->len - sizeof(struct ether_header);
-	flow_tmp.body.src_ip = ipv4_h->ip_src;
-	flow_tmp.body.dst_ip = ipv4_h->ip_dst;
-	flow_tmp.body.tos = ipv4_h->ip_tos;
-	// TODO first and last time of packet of the flow
+	flow_tmp.num_bytes = (int)packet_header->len - sizeof(struct ether_header);
+	flow_tmp.src_ip = ipv4_h->ip_src;
+	flow_tmp.dst_ip = ipv4_h->ip_dst;
+	flow_tmp.tos = ipv4_h->ip_tos;
 
+	// get info from corresponding header
 	if (ntohs(eth_h->ether_type) == ETHERTYPE_IP) {
 
 		if (ipv4_h->ip_p == TCP_PROTO_N) {
 			// TCP
-			process_tcp(packet, flow_cache, &flow_tmp);
-			//std::cout << "TCP " << flow_cache.size() << std::endl;
+			get_tcp_info((u_char*)tcp_h, &flow_tmp);
+
 		} else if (ipv4_h->ip_p == UDP_PROTO_N) {
 			// UDP
-			process_udp(packet, flow_cache, &flow_tmp);
-			//std::cout << "UDP " << flow_cache.size() << std::endl;
+			get_udp_info((u_char *)udp_h, &flow_tmp);
 
 		} else if (ipv4_h->ip_p == ICMP_PROTO_N) {
-			process_icmp(flow_cache, &flow_tmp);
-			//std::cout << "ICMP " << flow_cache.size() << std::endl;
+			// ICMP
+			flow_tmp.protocol = ICMP_PROTO_N;
 	
 		} else {
 			std::cerr << "Something else than IPv4 was in the pcap file" << std::endl;
+			return;
 		}
-	}
+		// all info about flow was retrieved now process_flow
+		process_flow(arg, &flow_tmp);
 
-	if (flow_cache.size() == (long unsigned int)arguments->flow_cache) {
-		send_flow(flow_cache);
 	}
-
-	//print_flow(flow_cache);
+	//print_flow(arg->flow_cache);
 }
 
 
 int main(int argc, char **argv){
 
-    arguments_t args;
+    arguments_t args = {};
 	pcap_t *handle; // Packet handle returned from pcap_open_offline
 
-	// TODO add filter
     parse_arguments(argc, argv, &args);
 
 	if (args.file != "") {
@@ -272,6 +306,11 @@ int main(int argc, char **argv){
 		pcap_close(handle);
 		my_exit("Pcap_loop failed", 1);
 	}
+
+	if (args.flow_cache.size() != 0) {
+		send_all_flows(args.flow_cache);
+	}
+	//print_flow(args.flow_cache);
 
 	pcap_close(handle);
     return 0;
