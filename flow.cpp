@@ -1,6 +1,4 @@
 #include <iostream>
-#include <tuple>
-#include <map>
 #include <list>
 #include <iterator>
 #include <getopt.h>
@@ -14,6 +12,11 @@
 #include "netinet/ip_icmp.h"
 #include "netinet/tcp.h"
 #include "netinet/udp.h"
+#include "string.h"
+#include "sys/time.h"
+#include "sys/socket.h"
+#include <unistd.h> 
+
 
 #define ETHER_SIZE 14
 #define TCP_PROTO_N 6
@@ -66,8 +69,8 @@ typedef struct {
     int flow_cache_size = 1024;                 // variable to store flow cache size
 	int flow_seq;								// variable to store info about how many flows were seen
 	std::list<nf_v5_body_t> flow_cache; 		// variable to represent the flow cache
-	uint32_t currect_time;
-	uint32_t first_packet_time;
+	unsigned long currect_time;
+	unsigned long first_packet_time;
 } arguments_t;
 
 
@@ -130,7 +133,10 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 	}
 }
 
-// help function TODO delete later
+// TODO use inet_pton
+void parse_collector();
+
+// TODO delete later
 void print_flow(std::list<nf_v5_body_t> &flow_cache) {
 	std::list<nf_v5_body_t>::iterator it;
 	//std::cout << "src ip\tdst_ip\tsrc_port\tdst_port\tprotocol" << std::endl;
@@ -143,25 +149,84 @@ void print_flow(std::list<nf_v5_body_t> &flow_cache) {
 	}
 }
 
-// TODO create flow header when I need to send the packet
-void create_flow_header();
+// TODO prepare flow before I need to send it
+u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows) {
+
+	nf_v5_header_t header = {};
+	struct timeval tv = {};
+	int err = 0;
+
+	if ((err = gettimeofday(&tv, NULL)) == -1) {
+		my_exit("gettimeofday() error", 1);
+	}
+
+	header.version = htons(5);
+	header.count = htons(n_of_flows);
+	header.sysuptime = htonl(args->currect_time - args->first_packet_time);
+	header.unix_sec = tv.tv_sec;
+	header.unix_nsecs = tv.tv_usec * 1000;
+	header.flow_seq = htonl(args->flow_seq);
+	header.engine_type = 0;
+	header.engine_id = 0;
+	header.sampling_int = 0;
+
+
+	for (int i = 0; i < n_of_flows; i++) {
+
+		flow_buff[i].first = htonl(flow_buff[i].first);
+		flow_buff[i].last = htonl(flow_buff[i].last);
+		flow_buff[i].num_packets = htonl(flow_buff[i].num_packets);
+		flow_buff[i].num_bytes = htonl(flow_buff[i].num_bytes);
+  	}
+
+	u_char *p = (u_char*)malloc(sizeof(nf_v5_header_t) + sizeof(nf_v5_body_t)*n_of_flows);
+
+	if (p == NULL) {
+		my_exit("Alloc failed", 1);
+	}
+
+	u_char *tmp = p;
+	memcpy(p,&header,sizeof(nf_v5_header_t));
+
+	for (int i = 0; i < n_of_flows; i++) {
+		memcpy(tmp+sizeof(nf_v5_header_t)+sizeof(nf_v5_body_t)*i,&flow_buff[i], sizeof(nf_v5_body_t));
+	}
+
+	return p;
+}
 
 // TODO sent flow
-void send_flow(std::list<nf_v5_body_t> &flow_cache) {
+void send_flow(arguments_t *args, nf_v5_body_t flow_buffer[], int n_of_flows) {
+	std::cout << "Exporting " << n_of_flows << " flows" << std::endl;
+	u_char *flow_to_export = prepare_flow(args, flow_buffer, n_of_flows);
 
-	//nf_v5_body_t flow_to_send = flow_cache.front();
-	flow_cache.pop_front();
-	std::cout << "Flow exported, size now: " << flow_cache.size() << std::endl;
-}
 
-void send_all_flows(std::list<nf_v5_body_t> &flow_cache) {
+	// TODO redo this
+	// create UDP socket
+	struct sockaddr_in servaddr;
 
-	std::cout << "Exporting " << flow_cache.size() << " flows" << std::endl;
-	while (!flow_cache.empty()) {
-		flow_cache.pop_front();
-		std::cout << "Flow exported, size now: " << flow_cache.size() << std::endl;
+	int sockfd = socket(AF_INET,SOCK_DGRAM,0);
+	if (sockfd == -1) {
+		my_exit("Socket failed to create", 1);
 	}
+	memset(&servaddr, 0, sizeof(servaddr)); 
+	servaddr.sin_family = AF_INET; 
+    servaddr.sin_port = htons(args->port);
+	servaddr.sin_addr.s_addr = inet_addr(args->collector.c_str());
+
+	int err = sendto(sockfd, flow_to_export, 
+					(sizeof(nf_v5_header_t) + sizeof(nf_v5_body_t)*n_of_flows),
+					0,
+					(struct sockaddr*) &servaddr,sizeof(struct sockaddr_in));
+	if (err == -1) {
+		my_exit("send to error",1);
+	}
+
+	args->flow_seq += n_of_flows;
+	close(sockfd);
+	free(flow_to_export);
 }
+
 
 int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 
@@ -175,27 +240,30 @@ int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 				it->num_packets++;
 				it->num_bytes += flow->num_bytes;
 				it->tcp_flags |= flow->tcp_flags;
-				it->last = flow->last;
+				it->last = args->currect_time - args->first_packet_time;
 				return 0;
 		}
 	}
 
 
-	// flow is in the cache
+	// flow is not in the cache
 	return 1;
 }
 
 void add_flow(arguments_t *args, nf_v5_body_t* flow) {
 
-	// check if flow isn't full
+	// check if flow is full
 	if (args->flow_cache.size() == (long unsigned int)args->flow_cache_size) {
-		send_flow(args->flow_cache);
+		nf_v5_body_t flow_buff[30];
+		flow_buff[0] = args->flow_cache.front();
+		args->flow_cache.pop_front();
+		send_flow(args, flow_buff, 1);
 	}
+
 	// flow is new so I set the number of packets to 1 and add the flow
 	flow->num_packets = 1;
-	// TODO first and last time of packet
-	flow->first = args->first_packet_time - args->currect_time;
-	flow->last = args->first_packet_time - args->currect_time;
+	flow->first = args->currect_time - args->first_packet_time;
+	flow->last = args->currect_time - args->first_packet_time;
 	args->flow_cache.push_back(*flow);
 }
 
@@ -239,7 +307,8 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 
 	arguments_t *arg = (arguments_t*)args; //program arguments
 	nf_v5_body_t flow_tmp = {}; // temporary flow that will be inicialized
-	
+
+
 	if (arg->first_packet_time == 0) {
 		arg->first_packet_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
 	}
@@ -307,11 +376,24 @@ int main(int argc, char **argv){
 		my_exit("Pcap_loop failed", 1);
 	}
 
-	if (args.flow_cache.size() != 0) {
-		send_all_flows(args.flow_cache);
+	nf_v5_body_t flow_buffer[30];
+
+	int i = 0;
+	while (args.flow_cache.size() != 0) {
+		flow_buffer[i++] = args.flow_cache.front();
+		args.flow_cache.pop_front();
+		if (i == 30) {
+			send_flow(&args, flow_buffer, i);
+			i = 0;
+			memset(flow_buffer, 0, sizeof(flow_buffer));
+		}
+	}
+	// check if something remained unsend
+	if (i != 0) { 
+		send_flow(&args, flow_buffer, i);
 	}
 	//print_flow(args.flow_cache);
-
+	
 	pcap_close(handle);
     return 0;
 }
