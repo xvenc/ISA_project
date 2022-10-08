@@ -73,6 +73,8 @@ typedef struct {
 	std::list<nf_v5_body_t> flow_cache; 		// variable to represent the flow cache
 	unsigned long currect_time; 				// store "current time" from pcap in milliseconds
 	unsigned long first_packet_time;
+	unsigned long sec;
+	unsigned long usec;
 } arguments_t;
 
 
@@ -103,7 +105,6 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 			}   
 			
 		} else if (c == 'c') {
-			// TODO getaddrinfo or gethostbyname
             args->collector = optarg;
 
 		} else if (c == 'a') {
@@ -235,18 +236,19 @@ int parse_collector(arguments_t *args) {
 u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows) {
 
 	nf_v5_header_t header = {};
+	/*
 	struct timeval tv = {};
 	int err = 0;
 
 	if ((err = gettimeofday(&tv, NULL)) == -1) {
 		my_exit("gettimeofday() error", 1);
 	}
-
+	*/
 	header.version = htons(5);
 	header.count = htons(n_of_flows);
 	header.sysuptime = htonl(args->currect_time - args->first_packet_time);
-	header.unix_sec = htonl(tv.tv_sec);
-	header.unix_nsecs = htonl(tv.tv_usec * 1000);
+	header.unix_sec = htonl(args->sec);
+	header.unix_nsecs = htonl(args->usec * 1000);
 	header.flow_seq = htonl(args->flow_seq);
 	header.engine_type = 0;
 	header.engine_id = 0;
@@ -321,6 +323,8 @@ void send_flow(arguments_t *args, nf_v5_body_t flow_buffer[], int n_of_flows) {
 
 int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 
+	// TODO check tcp fin and check inactive timer
+
 	// check if flow is present
 	std::list<nf_v5_body_t>::iterator it;
     for (it = args->flow_cache.begin(); it != args->flow_cache.end(); ++it) {
@@ -342,6 +346,8 @@ int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 }
 
 void add_flow(arguments_t *args, nf_v5_body_t* flow) {
+
+	// TODO check fin a rst flags?
 
 	// check if flow is full
 	if (args->flow_cache.size() == (long unsigned int)args->flow_cache_size) {
@@ -434,6 +440,8 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 		arg->first_packet_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
 	}
 	arg->currect_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
+	arg->sec = packet_header->ts.tv_sec;
+	arg->usec = packet_header->ts.tv_usec;
 
 	eth_h = (struct ether_header*)(packet);
 	ipv4_h = (struct ip*)(packet + ETHER_SIZE);
