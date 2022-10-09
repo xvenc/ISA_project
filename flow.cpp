@@ -73,12 +73,14 @@ typedef struct {
 	std::list<nf_v5_body_t> flow_cache; 		// variable to represent the flow cache
 	unsigned long currect_time; 				// store "current time" from pcap in milliseconds
 	unsigned long first_packet_time;
-	unsigned long sec;
-	unsigned long usec;
+	u_int32_t sec;
+	u_int32_t usec;
 } arguments_t;
 
 
 char errbuf[PCAP_ERRBUF_SIZE];
+
+static int counter;
 
 // function that prints message to stderr and exits with given ret code
 void my_exit(std::string msg, int ret_code) {
@@ -159,13 +161,11 @@ int parse_collector(arguments_t *args) {
 
 	if ((retval = inet_pton(AF_INET, args->collector.c_str(), &ipv4_addr)) == 1) {
 		// valid ipv4 with no port
-		//std::cout << "IPV4 "  << std::endl;
 		valid_check = args->family = AF_INET;
 		return 0;
 	
 	} else if ((retval = inet_pton(AF_INET6, args->collector.c_str(), &ipv6_addr)) == 1) {
 		// valid ipv6 with port
-		//std::cout << "IPV6 " << std::endl;
 		valid_check = args->family = AF_INET6;
 		return 0;
 	}
@@ -190,14 +190,12 @@ int parse_collector(arguments_t *args) {
 	// try again
 	if ((retval = inet_pton(AF_INET, args->collector.c_str(), &ipv4_addr)) == 1) {
 		// valid ipv4 with port
-		//std::cout << "IPV4 " << port << std::endl;
 		valid_check = args->family = AF_INET;
 		args->port = check_port(port);
 		return 0;
 	
 	} else if ((retval = inet_pton(AF_INET6, args->collector.c_str(), &ipv6_addr)) == 1) {
 		// valid ipv6 with port
-		//std::cout << "valid IPV6 " << port << std::endl;
 		valid_check = args->family = AF_INET6;
 		args->port = check_port(port);
 		return 0;
@@ -231,6 +229,10 @@ int parse_collector(arguments_t *args) {
 	return 1;
 }
 
+// get time of current packet since "boot time"
+unsigned long get_time(unsigned long curr, unsigned long boot) {
+	return curr - boot;
+}
 
 // prepare flow before I need to send it
 u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows) {
@@ -281,7 +283,7 @@ u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows
 
 // sent flow
 void send_flow(arguments_t *args, nf_v5_body_t flow_buffer[], int n_of_flows) {
-	//std::cout << "Exporting " << n_of_flows << " flows" << std::endl;
+	std::cout << "Exporting " << n_of_flows << " flows. Packet number: " << counter << std::endl;
 	u_char *flow_to_export = prepare_flow(args, flow_buffer, n_of_flows);
 
 
@@ -320,10 +322,12 @@ void send_flow(arguments_t *args, nf_v5_body_t flow_buffer[], int n_of_flows) {
 	free(flow_to_export);
 }
 
-
+// check if current new flow is already in flow cache
 int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 
-	// TODO check tcp fin and check inactive timer
+	int cnt = 0;
+	nf_v5_body_t flow_buffer[30];
+	unsigned long t = get_time(args->currect_time, args->first_packet_time);
 
 	// check if flow is present
 	std::list<nf_v5_body_t>::iterator it;
@@ -331,11 +335,31 @@ int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 		if ((it->src_ip.s_addr == flow->src_ip.s_addr) && (it->dst_ip.s_addr == flow->dst_ip.s_addr)
 			&& (it->src_port == flow->src_port) && (it->dst_port == flow->dst_port) &&
 			(it->protocol == flow->protocol)) {
-				// already in cache
+				/*
+				// check if inactive timer isnt finnished
+				if (((t - it->last) >= (args->seconds*1000))) {
+					flow_buffer[cnt++] = *it;
+					it = args->flow_cache.erase(it);
+					send_flow(args, flow_buffer, cnt);
+					return 1;
+				}
+				*/
+
+				// already in cache so update info about the cache
 				it->num_packets++;
 				it->num_bytes += flow->num_bytes;
 				it->tcp_flags |= flow->tcp_flags;
 				it->last = args->currect_time - args->first_packet_time;
+
+				// TODO check TCP fin and rst flags and send it - given flow has ended
+				/*
+				if ((flow->tcp_flags & TH_FIN) || (flow->tcp_flags & TH_RST)) {
+					std::cout << "FLAGS ";
+					flow_buffer[cnt++] = *it;
+					it = args->flow_cache.erase(it);
+					send_flow(args, flow_buffer, cnt);	
+				} 
+				*/
 				return 0;
 		}
 	}
@@ -347,10 +371,10 @@ int check_flow_exists(arguments_t* args, nf_v5_body_t *flow) {
 
 void add_flow(arguments_t *args, nf_v5_body_t* flow) {
 
-	// TODO check fin a rst flags?
 
 	// check if flow is full
 	if (args->flow_cache.size() == (long unsigned int)args->flow_cache_size) {
+		std::cout << "FULL cache ";
 		nf_v5_body_t flow_buff[30];
 		flow_buff[0] = args->flow_cache.front();
 		args->flow_cache.pop_front();
@@ -362,11 +386,18 @@ void add_flow(arguments_t *args, nf_v5_body_t* flow) {
 	flow->first = args->currect_time - args->first_packet_time;
 	flow->last = args->currect_time - args->first_packet_time;
 	args->flow_cache.push_back(*flow);
+	/*
+	// TODO check fin a rst flags?
+	if ((flow->tcp_flags & TH_FIN) || (flow->tcp_flags & TH_RST)) {
+		nf_v5_body_t flow_buff[30];
+		flow_buff[0] = *flow;
+		std::cout << "FLAGS ";
+		send_flow(args, flow_buff, 1);
+	}
+	*/
 }
 
-unsigned long get_time(unsigned long curr, unsigned long boot) {
-	return curr - boot;
-}
+
 
 void check_timers(arguments_t *args) {
 
@@ -377,6 +408,7 @@ void check_timers(arguments_t *args) {
     for (i = args->flow_cache.begin(); i != args->flow_cache.end(); ++i) {
 		//std::cout << args->currect_time-args->first_packet_time << " " << i->first << " " << args->a_timer * 1000 << std::endl;
 		unsigned long t = get_time(args->currect_time, args->first_packet_time);
+		// active and inactive timers
 		if (((t - i->first) >= (args->a_timer * 1000)) || ((t - i->last) >= (args->seconds*1000)) ) {
 			//std::cout << "Timers expired" << std::endl;
 			// store it
@@ -391,10 +423,31 @@ void check_timers(arguments_t *args) {
 	}
 	// check if something remained unsend
 	if (cnt != 0) { 
+		std::cout << "timers " ;
 		send_flow(args, flow_buffer, cnt);
 	}
 }
 
+void check_flags(arguments_t *args, nf_v5_body_t *flow) {
+	std::list<nf_v5_body_t>::iterator i;
+	nf_v5_body_t flow_buffer[30];
+	int cnt = 0;
+    for (i = args->flow_cache.begin(); i != args->flow_cache.end(); ++i) {
+		// find the corresponding flow
+		if ((i->src_ip.s_addr == flow->src_ip.s_addr) && (i->dst_ip.s_addr == flow->dst_ip.s_addr)
+			&& (i->src_port == flow->src_port) && (i->dst_port == flow->dst_port) &&
+			(i->protocol == flow->protocol)) {
+			// check if it has tcp fin or rst flags and then export it
+			if ((flow->tcp_flags & TH_FIN) || (flow->tcp_flags & TH_RST)) {
+				std::cout << "FLAGS ";
+				flow_buffer[cnt++] = *i;
+				i = args->flow_cache.erase(i);
+				send_flow(args, flow_buffer, cnt);	
+				return;
+			} 
+		}
+	}
+}
 
 void process_flow(arguments_t *args, nf_v5_body_t *tmp_flow) {
 
@@ -405,6 +458,9 @@ void process_flow(arguments_t *args, nf_v5_body_t *tmp_flow) {
 	if (check_flow_exists(args, tmp_flow)) {
 		add_flow(args, tmp_flow);
 	}
+	// check if current flow has tcp fin or rst flags
+	// the flow was updated or added in the previous command
+	check_flags(args, tmp_flow);
 }
 
 void get_tcp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
@@ -436,26 +492,32 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 	nf_v5_body_t flow_tmp = {}; // temporary flow that will be inicialized
 
 
-	if (arg->first_packet_time == 0) {
-		arg->first_packet_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
-	}
-	arg->currect_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
-	arg->sec = packet_header->ts.tv_sec;
-	arg->usec = packet_header->ts.tv_usec;
+	
+
 
 	eth_h = (struct ether_header*)(packet);
 	ipv4_h = (struct ip*)(packet + ETHER_SIZE);
 	udp_h = (struct udphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
 	tcp_h = (struct tcphdr*)(packet + ETHER_SIZE + ipv4_h->ip_hl*4);
 
-	// set information about flow that I can get from ip header
-	flow_tmp.num_bytes = (int)packet_header->len - sizeof(struct ether_header);
-	flow_tmp.src_ip = ipv4_h->ip_src;
-	flow_tmp.dst_ip = ipv4_h->ip_dst;
-	flow_tmp.tos = ipv4_h->ip_tos;
-
 	// get info from corresponding header
 	if (ntohs(eth_h->ether_type) == ETHERTYPE_IP) {
+		counter++;
+
+		if (arg->first_packet_time == 0) {
+				arg->first_packet_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
+		}
+		arg->currect_time = packet_header->ts.tv_sec * 1000 + packet_header->ts.tv_usec/1000;
+		arg->sec = packet_header->ts.tv_sec;
+		arg->usec = packet_header->ts.tv_usec;
+
+		// set information about flow that I can get from ip header
+		flow_tmp.num_bytes = (u_int32_t)(packet_header->len - sizeof(struct ether_header));
+		flow_tmp.src_ip = ipv4_h->ip_src;
+		flow_tmp.dst_ip = ipv4_h->ip_dst;
+		flow_tmp.tos = ipv4_h->ip_tos;
+
+
 
 		if (ipv4_h->ip_p == TCP_PROTO_N) {
 			// TCP
@@ -484,6 +546,7 @@ int main(int argc, char **argv){
 
     arguments_t args = {};
 	pcap_t *handle; // Packet handle returned from pcap_open_offline
+	struct bpf_program packet_filter; 	// structure for compiled packet filter
 
     parse_arguments(argc, argv, &args);
 
@@ -507,6 +570,18 @@ int main(int argc, char **argv){
 		pcap_close(handle);
 		my_exit("Device doesn't provide ethernet headers", 1);
 	}
+
+	// compile the created filter expression
+	if (pcap_compile(handle, &packet_filter,"icmp or tcp or udp" , 0, PCAP_NETMASK_UNKNOWN) == -1) {
+		pcap_close(handle);
+		my_exit(pcap_geterr(handle), 1);
+	}
+	
+	// apply the compiled filter
+	if (pcap_setfilter(handle, &packet_filter) == -1) {
+		pcap_close(handle);
+		my_exit(pcap_geterr(handle), 1);
+	}		
 
 	// main loop to read all packets from a pcap
 	if (pcap_loop(handle, -1, process_packet, (u_char*)&args) == -1) {
