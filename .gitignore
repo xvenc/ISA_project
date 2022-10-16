@@ -1,3 +1,5 @@
 *.pcap
 flow
 test/
+logs/
+isa-netflow-testsuite/
