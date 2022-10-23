@@ -18,7 +18,6 @@
 #include "netinet/udp.h"
 #include "string.h"
 #include "sys/time.h"
-#include "sys/socket.h"
 #include <unistd.h> 
 
 
@@ -248,13 +247,19 @@ u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows
 	header.engine_id = 0;
 	header.sampling_int = 0;
 
-
+	// TODO mby convert all
 	for (int i = 0; i < n_of_flows; i++) {
 
 		flow_buff[i].first = htonl(flow_buff[i].first);
 		flow_buff[i].last = htonl(flow_buff[i].last);
 		flow_buff[i].num_packets = htonl(flow_buff[i].num_packets);
 		flow_buff[i].num_bytes = htonl(flow_buff[i].num_bytes);
+		flow_buff[i].next_hop = htonl(flow_buff[i].next_hop);
+		flow_buff[i].iif_index = htons(flow_buff[i].iif_index);
+		flow_buff[i].oif_index = htons(flow_buff[i].oif_index);
+		flow_buff[i].src_as = htons(flow_buff[i].src_as);
+		flow_buff[i].dst_as = htons(flow_buff[i].dst_as);
+		flow_buff[i].end_pad = htons(flow_buff[i].end_pad);
   	}
 
 	u_char *p = (u_char*)malloc(sizeof(nf_v5_header_t) + sizeof(nf_v5_body_t)*n_of_flows);

@@ -1,0 +1,202 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[czech]{babel}
+\usepackage[left=2cm,text={17cm, 24cm},top=3cm,a4paper]{geometry}
+\usepackage{times}
+\usepackage{csquotes}
+\usepackage[hidelinks, hyperfootnotes=false]{hyperref}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{graphicx}
+\begin{document}
+
+\begin{titlepage}
+\begin{center}
+
+\Huge\textsc{Vysoké učení technické v Brně\\
+\huge
+Fakulta informačních technologií}\\
+\vspace{\stretch{0.382}}
+\LARGE ISA\\ 
+\Huge Generování NetFlow dat\\ ze zachycené síťové komunikace\\
+\Large MANUAL
+\vspace{\stretch{0.618}}
+
+\end{center}
+\Large
+30-10-2022 \hfill Václav Korvas (xkorva03)
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{Zadání}
+Vytvořte aplikaci, která bude ze zachycených síťových dat ve formátu pcap vytvářet záznamy NetFlow, které následně odešle na kolektor, který je buď zadán příkazovou řádkou nebo se pošle na výchozí kolektor.
+\\\\
+Spuštění aplikace:\\ 
+\\\texttt{./flow [-f <file>] [-c <netflow\_collector>[:<port>]] [-a <active\_timer>] [-i <inactive\_timer>] [-m <count>]}
+\begin{itemize}
+    \item {\texttt{-f <file>} jméno analyzovaného souboru nebo STDIN,}
+    \item {\texttt{-c <neflow\_collector:port>} IP adresa, nebo hostname NetFlow kolektoru. Volitelně i UDP port (127.0.0.1:2055, pokud není specifikováno),}
+    \item {\texttt{-a <active\_timer>} interval v sekundách, po kterém se exportují aktivní záznamy na kolektor (60, pokud není specifikováno),}
+    \item {\texttt{-i <inactive\_timer>} - interval v sekundách, po jehož vypršení se exportují neaktivní záznamy na kolektor (10, pokud není specifikováno),}
+    \item {\texttt{-m <count>} velikost flow-cache. Při dosažení max. velikosti dojde k exportu nejstaršího záznamu v cachi na kolektor (1024, pokud není specifikováno).\\}
+\end{itemize}
+Všechny parametry jsou brány jako volitelné. Pokud některý z parametrů není uveden, použije se místo něj výchozí hodnota.
+\\\\
+Upřesnění zadání: Program zpracuje vstupní argumenty, zpracuje vstupní soubor pokud byl zadán jinak čte ze stardartního vstupu a poté jednotlivé \uv{flows} odešle na specifikovaný kolektor. 
+\\
+\begin{itemize}
+        \item {Jako export stačí použít NetFlow v5. Pokud byste implementovali v9 se šablonami, bude to bonusově zohledněno v hodnocení projektu,}
+        \item {Pro vytváření flow stačí podpora protokolů TCP, UDP, ICMP,}
+        \item {Informace, které neznáte (srcAS, dstAS, next-hop, aj.) nastavte jako nulové,}
+        \item {Při exportování používejte původní časové značky zachycené komunikace,}
+        \item {Exportované NetFlow data by měla být čitelná nástrojem nfdump.}
+\end{itemize}
+\pagebreak
+\section{Návod na použití}
+\subsection{Obsah oodevzdaného archivu}
+\begin{itemize}
+	\item {\texttt{Makefile}: s cíly \texttt{all} (sestaví výsledný program flow.cpp), \texttt{clean} (vymaže všechny vzniklé binární soubory a spustitelný program), \texttt{archive} (vytvoří archvive celého projektu),}
+	\item {\texttt{manual.pdf}: soubor s programovou dokumentací,}
+	\item {\texttt{flow.cpp}: zdrojový soubor výsledného programu,}
+	\item {\texttt{flow.1}: manuálová stránka programu.}
+\end{itemize}
+\subsection{Rozbalení a použití}
+První je nutné si tar-archiv rozbalit pomocí příkazu \texttt{tar -xvf xkorva03.tar}. Poté je nutné program přeloži pomocí příkazu \texttt{make} nebo
+pomocí příkazu \texttt{make all}. Tímto vznikne v spustitelný soubor v kořenové složce adresáře, ve kterém je spuštěn příkaz \texttt{make}. 
+Po přeložení aplikace ji lze jednodušš spustit pomocí \texttt{./flow <argumenty>}, kde je možné uvést jednotlivé argumenty v libovolném pořadí.
+\\\\ 
+Ovšem pokud není zadán parametr \texttt{-f}, který určuje vstupní pcap soubor, ze kterého se bude číst. Tak program bude číst ze standartního vstup neboli z \texttt{STDIN}.  
+U parametru \texttt{-c}, kterým se určuje IPv4 nebo IPv6 adresu kolektoru. Ovšem je nutné při zadávání IPv6 adresy spolu s portem tuto adresu zadat následujícím způsobem: \texttt{[IPv6\_adresa]:port}. U adres IPv4 nebo doménového jména žádná taková omezení nejsou.
+Při zadávaní IPv6 adresy bez portu žádné omezení není a lze ji zadat normálně a není nutné ji dát do hranatých závorek.
+\\\\
+Při nevalidním zadání vstupních argumentů končí program s návratovým chybovým kódem \texttt{1} a odpovídající chybovou hláškou.
+\subsection*{Příklady spuštění}
+Zde je uvedeno několik validních spuštění programu.
+\begin{itemize}
+	\item \texttt{./flow < icmp.pcap}
+	\item \texttt{./flow -f icmp.pcap -c [::1]:2055}
+	\item \texttt{./flow -f tcp.pcap -c ::1}
+	\item \texttt{./flow -c 127.0.0.1:2055 < icmp.pcap}
+	\item \texttt{./flow -f icmp.pcap -c localhost -m 5}
+\end{itemize}
+\pagebreak
+\section{Teorie}
+TODO
+\pagebreak
+\section{Implemtační detaily}
+V následující sekci se popisuje strukturu programu a popisuje řešení některých nejduležitějších částí tohoto projektu.
+V programu je hojně využita knihovna \texttt{pcap} a několik funkcí z této knihovny, jako třeba funkce na čtení pcap souboru nebo funkce
+na vytvoření filtru, aby byly čteny pouze \texttt{ICMP, UDP} nebo \texttt{TCP} pakety. Všechny potřebné informace, jak použít tyto knihovní funkce byly z této stránky  
+
+\subsection*{Využité knihovny}
+\begin{itemize}
+	\item \texttt{pcap/pcap.h} - knihovna na zachytavání, procházení a filtrovaní paketů, 
+	\item \texttt{getopt.h} - zpracování argumentů příkazové řádky,
+	\item \texttt{netinet/ether.h} - zpracování ethernetové hlavičky, 
+	\item \texttt{sys/socket.h} - knihovna na otevírání síťových schránek,
+	\item \texttt{netinet/ip\_icmp.h} - zpracování ICMP hlaviček paketů,
+	\item \texttt{netinet/tcp.h} - zpracování TCP hlaviček paketů,
+	\item \texttt{netinet/udp.h} - zpracování UDP hlaviček,
+	\item \texttt{netdb.h} - překlad doménového jména na IP adresu,
+	\item \texttt{netinet/ip.h} - zpracování IPv4 hlavičky.
+\end{itemize}
+\subsection{Parsování argumentů}
+První věc, která se po spuštění programu provede, je zpracování argumentů z příkazové řádky. Toto se děje ve funkci \texttt{parse\_arguments}. V této funkci se k tomuto účelu používá funkce 
+\texttt{getopt} z knihovny \texttt{getopt.h}. Pokud je použit neplatný argument program okamžite končí s návratovým kódem 1. 
+\\\\
+Postupně se pak kontrolují všechny argumenty a jejich parametry, například jestli soubor existuje nebo jestli bylo zadáno validní nezáporné číslo pro časovače.
+Během průchodu všemi argumenty se postupně plní speciální struktura \texttt{arguments\_t}, ve které jsou uloženy všechny argumenty zadány uživatelem.
+
+\subsection{Zpracovaní kolektoru}
+Poté co jsou zpracovány všechny programové argumenty tak se volá funkce \texttt{parse\_collector}. V této funkci probíhá zpracování zadaného kolektoru uživatelem.
+K tomuto účelu se používá funkce \texttt{inet\_pton} z knihovny \texttt{arpa/inet.h}. Nejprve se otestuje jestli je to validní IPv4 nebo IPv6 adresa bez portu, pokud ano
+tak funkce končí úspěchem a do struktury \texttt{arguments\_t} si ukládá informaci, jestli se jednalo o IPv4 nebo IPv6 adresu.
+\\\\
+Pokud ovšem ani jedna z těchto funkci něuspěje tak se najde poslední \texttt{:} a cokoliv za ní se odstraní a je bráno jako číslo portu. A opět se otestuje, jestli je tato IP adresa validní.
+Pokud ani toto neprojde tak zbývá poslední možnost a tou je, že uživatel zadal adresu kolektoru pomocí doménového jména.
+Proto se doménové jméno zkusí přeložit pomocí funkce \texttt{getaddrinfo}. Poté se zjistí, jakou adresu nám tato funkce vrátila, tedy jestli se jedná o IPv4 nebo IPv6 adresu.
+Pokud ani zde nedojde k úspechu tak funkce vrátí hodnotu 1 a běh programu se ukončí s korespondující chybovou hláškou.
+
+\subsection{Zpracovaní paketů}
+Po zpracovaní kolektoru, přichází na řadu čtení paketů z pcap souboru. K tomuto účelu slouží funkce \texttt{pcap\_open\_offline}, která buď čte ze specifikovaného souboru, nebo pokud místo souboru zadáme \texttt{-} tak čte ze standartního vstupu.
+Dále následuje kontrola, že čteme ze souboru, který podporuje ethernetové hlavičky, pokud ne tak je program ukončen s chybovým kódem 1.
+\\\\
+Poté se vytvoří filtr, aby se vyfiltrovali nežádoucí protokoli, a my dostávali pouze pakety s protokoly \texttt{UDP, TCP a ICMP} a pouze IPv4. Poté tento filtr přeložíme pomocí funkce \texttt{pcap\_compile} a aplikujeme na vstupní soubor.
+A nakonec se pak prochází přes všechny pakety funkcí \texttt{pcap\_loop} a pakety se čtou až dokud žádný není. A na každý paket se aplikuje funkce \texttt{process\_packet}.
+\\\\
+V této funkci se nejprve inicializuje struktura \texttt{nf\_v5\_body\_t}, která slouží k uchování informací ohledně jednotlivých flows. Poté dochází k extrakci důležitých informací
+z jednotlivých vrstev a jejich ukládání do této struktury. Je to například zdrojová a cílová adresa, poté počet bytů, cilový a zdrojový port a protokolů UDP a TCP. U prvního paketu si
+uložím jeho čas příchodu a považuji jej za systémový čas, který už nikdy neměním a je uložen v proměnné \texttt{firt\_packet\_time}. A každý následující čas paketu je počítán relativně k tomuto času.
+
+\subsection{Vytvaření a zpracování flows}
+Po extrakci všech důležitých informací z hlaviček se volá funkce \texttt{process\_flow}. Zde se děje hned několik důležitých věcí a to: kontrola, jestli flow již existuje ve flow-cachi, pokud ne tak se vytvoří nový flow záznam a uloží se do cache. Poté zde probíha kontrola
+jednotlivých podmínek, při jejichž porušení dochazí k exportování flow záznamů. Mezi tyto podmínky patři kontrola aktivního a neaktivního časovače, kontrola, jestli je plná cache nebo kontrola, zda-li jsme neobdrželi \texttt{FIN} nebo \texttt{RST} příznak v TCP hlavičce.
+\subsection*{Kontrola existence flow záznamu}
+Kontrola se provádí tak, že se iteruje skrz flow-cache. Flow-cache je implementována jako jednosměrně vázaný linearní seznam, kde každá flow je jednoznačně určena šesticí: \texttt{zdrojová a cílová IP adresa, zdrojový a cílový port, ToS a protokolem}.  
+ Pokud takovýto záznam v cachi už existuje tak se pouze aktualizují položky jako \texttt{počet paketů, počet bytů ve flow, provede se kumulativní OR příznaků TCP, a aktualizuje se čas příchodu posledního paketu flow}.
+Pokud neexistuje tak se vytvoří nový záznam.
+
+\subsection*{Přidání flow záznamu}
+U přidávání nového záznamu se prvně provede kontrola, jestli náhodou není plná flow-cache, pokud ano tak se exportuje nejstarší záznam, tedy první prvek jednosměrně vázaného seznamu.
+Pokud cache plná není flow se přidá do cache a nastaví se počet paketů této flow na 1. A vypočítá se čas prvího a posledního paketu této flow vzhledem k prvnímu zpracovávanému paketu podle vzorce: 
+\texttt{čas současného - čas prvního} a tento čas je v milisekundách. Tyto položky se uloží do políček \texttt{First a Last}, jedná se tedy o relativní čas vzhledem k prvnímu paketu.
+\subsection*{Kontrola časovačů}
+Kontrola časovačů probíha ještě před tím než se provede kontrola záznamu ve flow-cachi. Kontrola probíha tak, že se projde celá cache a nad každým záznamem se provede následujíci porovnání: vezme se aktualní čas zpracovávaného paketu odečte se od nej čas prvního paketu v dáné flow záznamu a porovná se jestli je větší než čas aktivního časovače.
+Pokud ano tak se dana flow přidá do pole 30 záznamů, které se pak na konci procházení celé exportuje, protože lze najednou posílat až 30 záznamů.
+\\\\
+Pro neaktivní časovač se od aktualního času odečte čas posledního paketu v dané flow a pokud je větší než neaktivní časovač tak se daná flow opět uloží do pole, které se později exportuje.
+\subsection*{Konrola příznaků TCP}
+Úplně nakonci se provede ješte kontrola, jestli pravě zpracovávaný paket je typu TCP a pokud obsahuje příznak \texttt{FIN} nebo \texttt{RST} tak se přídá do dané flow ke které patří a pak se celá flow exportuje.
+\subsection{Odesílaní flows}
+Odesílání jednotlivých flow záznamů probíhá ve funkci \texttt{send\_flow}, kde se prvně připraví flow k odeslání ve funkci \texttt{prepare\_flow}. V této funkci se alokuje dostatečně veliká pamět pro všechny flow i s hlavičkou, která je definována ve struktuře
+\texttt{nf\_v5\_header\_t}. Tato hlavička se naplní informacemi, které se převedou pomocí \texttt{htons a htonl} do síťového formátu. A to stejné se provede s informacemi v jednotlivých flow záznamech.
+\\\\
+Poté funkce vratí alokovaný a naplněný buffer. Dále se otevře buď IPv4 nebo IPv6 schránka. A poté se na danou IP adresu a port pošle tento buffer pomocí funkce \texttt{sendto()}.
+\section{Testování}
+TODO
+\pagebreak
+\begin{thebibliography}{plain}
+  \bibitem[1]{pcap} Carstens, T., Guy, H..
+	  \emph{Programming with pcap} [online]. 2022. [accessed 2022-04-17].\\
+		Available from: \href{https://www.tcpdump.org/pcap.html}{\texttt{https://www.tcpdump.org/pcap.html}}
+	\bibitem[2]{OSI} Wikipedia contributors.
+	  \emph{OSI model} [online]. Wikipedia, The Free Encyclopedia; 2022-04-14. [accessed 2022-04-17]. 
+		Available from: \href{https://en.wikipedia.org/wiki/OSI\_model}{\texttt{https://en.wikipedia.org/wiki/\\OSI\_model}}
+	\bibitem[3]{Ether} Wikipedia contributors.
+	  \emph{Ethernet frame} [online]. Wikipedia, The Free Encyclopedia; 2022-04-01. [accessed 2022-04-17]. 
+		Available from: \href{https://en.wikipedia.org/wiki/Ethernet\_frame}{\texttt{https://en.wikipedia.org/wiki/\\Ethernet\_frame}}
+	\bibitem[4]{ARP} Wikipedia contributors.
+	  \emph{Address Resolution Protocol} [online]. Wikipedia, The Free Encyclopedia; 2022-04-06. [accessed 2022-04-17]. \\
+		Available from: \href{https://en.wikipedia.org/wiki/Address\_Resolution\_Protocol}{\texttt{https://en.wikipedia.org/wiki/Address\_Resolution\\\_Protocol}}
+	\bibitem[5]{IPV4ICMP} Veselý, V. 
+		\emph{Síťová vrstva -- IPv4} [University lecture]. 2021. 
+		Available from: \href{https://wis.fit.vutbr.cz/FIT/st/cfs.php.cs?file=\%2Fcourse\%2FIPK-IT\%2Flectures\%2FIPK2021-06-IPv6.pdf&cid=14678}{\texttt{https://wis.fit.vutbr.cz/FIT/st/cfs.php.cs?file=\%2Fcourse\\\%2FIPK-IT\%2Flectures\%2FIPK2021-06-IPv6.pdf\&cid=14678}}
+	\bibitem[6]{IPV6ICMPv6} Veselý, V.. 
+		\emph{IPv6 síťová vrstva} [University lecture]. 2021. 
+		Available from: \href{https://wis.fit.vutbr.cz/FIT/st/cfs.php.cs?file=\%2Fcourse\%2FIPK-IT\%2Flectures\%2FIPK2021-04-IPv4.pdf&cid=14678}{\texttt{https://wis.fit.vutbr.cz/FIT/st/cfs.php.cs?file=\%2Fcourse\\\%2FIPK-IT\%2Flectures\%2FIPK2021-04-IPv4.pdf\&cid=14678}}
+	\bibitem[7]{TCP} Wikipedia contributors.
+	  \emph{Transmission Control Protocol} [online]. Wikipedia, The Free Encyclopedia; 2022-04-09. [accessed 2022-04-17]. 
+		Available from: \href{https://en.wikipedia.org/wiki/Transmission\_Control\_Protocol}{\texttt{https://en.wikipedia.org/wiki/Transmission\_Control\_Protocol}}
+	\bibitem[8]{UDP} Wikipedia contributors.
+	  \emph{User Datagram Protocol} [online]. Wikipedia, The Free Encyclopedia; 2022-03-24. [accessed 2022-04-17]. \\
+		Available from: \href{https://en.wikipedia.org/wiki/User\_Datagram\_Protocol}{\texttt{https://en.wikipedia.org/wiki/User\_Datagram\_Protocol}}
+	\bibitem[9]{ARG} Free Software Foundation. 
+		\emph{getopt(3) — Linux manual page} [online], [accessed 2022-04-17].\\
+		Available from: \href{https://www.man7.org/linux/man-pages/man3/getopt.3\\.html}{\texttt{https://www.man7.org/linux/man-pages/man3/getopt.3.html}}
+	\bibitem[10]{Pcapman} Jacobson, V., et al. 
+		\emph{Man page of pcap} [online], 2020-09-09 [accessed 2022-04-17].\\
+		Available from: \href{https://www.tcpdump.org/manpages/pcap.3pcap.html}{\texttt{https://www.tcpdump.org/manpages/pcap.3pcap.html}}
+	\bibitem[11]{Sebastian} Sebastian. 
+		\emph{C++ RFC3339 timestamp with milliseconds using std::chrono} [online], [accessed 2022-04-17].\\
+		Available from: \href{https://stackoverflow.com/questions/54325137/c-rfc3339-timestamp-with-milliseconds-using-stdchrono}{\texttt{https://stackoverflow.com/questions/54325137/c-rfc3339\\-timestamp-with-milliseconds-using-stdchrono}}
+	\bibitem[12]{Haskins} Haskins, K. 
+		\emph{I'm trying to build an RFC3339 timestamp in C} [online],[accessed 2022-04-17].\\
+		Available from: \href{https://stackoverflow.com/questions/48771851/im-trying-to-build-an-rfc3339-timestamp-in-c-how-do-i-get-the-timezone-offset}{\texttt{https://stackoverflow.com/questions/48771851/im\\-trying-to-build-an-rfc3339-timestamp-in-c-how-do-i-get-the\\-timezone-offset}}
+	\bibitem[13]{wire} Combs, G. 
+		\emph{Wireshark} [online] 2022,[accessed 2022-04-17].
+		Available from: \href{https://www.wireshark.org/}{\texttt{https://www.wireshark.org/}}
+
+  \end{thebibliography}
+\end{document}
