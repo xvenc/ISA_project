@@ -25,8 +25,9 @@
 #define TCP_PROTO_N 6
 #define UDP_PROTO_N 17
 #define ICMP_PROTO_N 1
+#define MAX_FLOWS 30
 
-
+// Structure for NetFlow version 5 header
 typedef struct {
 	uint16_t version;		// bytes 0-1
 	uint16_t count; 		// bytes 2-3
@@ -39,6 +40,7 @@ typedef struct {
 	uint16_t sampling_int;	// bytes 22-23
 }__attribute__((packed)) nf_v5_header_t;
 
+// Structure for NetFlow version 5 body 
 typedef struct {
 	struct in_addr src_ip;	// bytes 0-3
 	struct in_addr dst_ip;	// bytes 4-7
@@ -81,20 +83,18 @@ typedef struct {
 
 char errbuf[PCAP_ERRBUF_SIZE];
 
-static int counter;
-
-// function that prints message to stderr and exits with given ret code
+// Function that prints message to stderr and exits with given ret code
 void my_exit(std::string msg, int ret_code) {
 	std::cerr << msg << std::endl;
 	exit(ret_code);
 }
 
 
-// function to parse all supported command line arguments
+// Function to parse all supported command line arguments
 void parse_arguments(int argc, char** argv, arguments_t* args) {
 
-	const char *short_opts = "f:c:a:i:m:";
-	char *ptr;
+	const char *short_opts = "f:c:a:i:m:"; // program arguments
+	char *ptr; // for strtol function
 	int c;
 
 	while ((c = getopt(argc, argv,short_opts)) != -1){
@@ -139,6 +139,7 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 	}
 }
 
+// Function to check if port is valid and to return the port number
 u_int16_t check_port(std::string port) {
 	char *ptr;
 	int tmp = (u_int16_t)strtol(port.c_str(),&ptr, 10);
@@ -150,7 +151,9 @@ u_int16_t check_port(std::string port) {
 	return tmp;
 }
 
-// TODO separate this
+// Function to parse collector from argument
+// Checks if collector is IPv4/IPv6 or hostname without port
+// or IPv4/IPv6 or hostname with port 
 int parse_collector(arguments_t *args) {
 
 	struct in_addr ipv4_addr;
@@ -166,12 +169,13 @@ int parse_collector(arguments_t *args) {
 		return 0;
 	
 	} else if ((retval = inet_pton(AF_INET6, args->collector.c_str(), &ipv6_addr)) == 1) {
-		// valid ipv6 with port
+		// valid ipv6 with no port
 		valid_check = args->family = AF_INET6;
 		return 0;
 	}
 
 	if (valid_check == -1) {
+		// it wasnt IPv4/IPv6 without port
 		size_t pos = args->collector.find_last_of(':');
 		// ':' is in the string
 		if (pos != std::string::npos) {
@@ -234,6 +238,7 @@ unsigned long get_time(struct timeval curr, struct timeval boot) {
 }
 
 // prepare flow before I need to send it
+// malloc space for header and n-number of flows to send
 u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows) {
 
 	nf_v5_header_t header = {};
@@ -247,7 +252,7 @@ u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows
 	header.engine_id = 0;
 	header.sampling_int = 0;
 
-	// TODO mby convert all
+	// convert all values to network byte order
 	for (int i = 0; i < n_of_flows; i++) {
 
 		flow_buff[i].first = htonl(flow_buff[i].first);
@@ -280,9 +285,8 @@ u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows
 
 // sent flow
 void send_flow(arguments_t *args, nf_v5_body_t flow_buffer[], int n_of_flows) {
-	//std::cout << "Exporting " << n_of_flows << " flows. Packet number: " << counter << std::endl;
-	u_char *flow_to_export = prepare_flow(args, flow_buffer, n_of_flows);
 
+	u_char *flow_to_export = prepare_flow(args, flow_buffer, n_of_flows);
 
 	// create UDP socket
 	struct sockaddr_in servaddr;
@@ -316,7 +320,7 @@ void send_flow(arguments_t *args, nf_v5_body_t flow_buffer[], int n_of_flows) {
 	}
 	args->flow_seq += n_of_flows;
 	close(sockfd);
-	free(flow_to_export);
+	free(flow_to_export); // free allocated space
 }
 
 // check if current new flow is already in flow cache
@@ -348,15 +352,13 @@ void add_flow(arguments_t *args, nf_v5_body_t* flow) {
 
 	// check if flow is full
 	if (args->flow_cache.size() == (long unsigned int)args->flow_cache_size) {
-		//std::cout << "FULL cache ";
-		nf_v5_body_t flow_buff[30];
+		nf_v5_body_t flow_buff[MAX_FLOWS];
 		flow_buff[0] = args->flow_cache.front();
 		args->flow_cache.pop_front();
 		send_flow(args, flow_buff, 1);
 	}
 
 	// flow is new so I set the number of packets to 1 and add the flow
-	//std::cout << "Add src: " << inet_ntoa(flow->src_ip) << "\tcounter: " << counter << std::endl;
 	flow->num_packets = 1;
 	flow->first = (u_int32_t)get_time(args->currect_time, args->first_packet_time);
 	flow->last = (u_int32_t)get_time(args->currect_time, args->first_packet_time);
@@ -364,17 +366,17 @@ void add_flow(arguments_t *args, nf_v5_body_t* flow) {
 
 }
 
+// check if inactive or active timers of given flows run up
 void check_timers(arguments_t *args) {
 
 	std::list<nf_v5_body_t>::iterator i;
 	int cnt = 0;
-	nf_v5_body_t flow_buffer[30];
+	nf_v5_body_t flow_buffer[MAX_FLOWS];
 
     for (i = args->flow_cache.begin(); i != args->flow_cache.end();) {
 		unsigned long t = get_time(args->currect_time, args->first_packet_time);
 		// active and inactive timers
 		if (((t - i->first) >= (args->a_timer * 1000)) || ((t - i->last) >= (args->seconds*1000)) ) {
-			//std::cout << "Timers expired" << std::endl;
 			// store it
 			flow_buffer[cnt++] = *i;
 			i = args->flow_cache.erase(i);
@@ -389,15 +391,14 @@ void check_timers(arguments_t *args) {
 	}
 	// check if something remained unsend
 	if (cnt != 0) { 
-		//std::cout << "timers " ;
 		send_flow(args, flow_buffer, cnt);
 	}
 }
 
-// todo to count in the ack packet
+// function to check if TCP communication has RST or FIN flag
 void check_flags(arguments_t *args, nf_v5_body_t *flow) {
 	std::list<nf_v5_body_t>::iterator i;
-	nf_v5_body_t flow_buffer[30];
+	nf_v5_body_t flow_buffer[MAX_FLOWS];
 	int cnt = 0;
     for (i = args->flow_cache.begin(); i != args->flow_cache.end(); ++i) {
 		// find the corresponding flow
@@ -430,6 +431,7 @@ void process_flow(arguments_t *args, nf_v5_body_t *tmp_flow) {
 	check_flags(args, tmp_flow);
 }
 
+// store important info from tcp header
 void get_tcp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
 
 	struct tcphdr *tcp = (struct tcphdr*)(packet);
@@ -440,6 +442,7 @@ void get_tcp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
 
 }
 
+// store important info from udp header
 void get_udp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
 
 	struct udphdr *udp_h = (struct udphdr*)(packet);
@@ -449,6 +452,7 @@ void get_udp_info(const u_char *packet, nf_v5_body_t* tmp_flow) {
 
 }
 
+// main function where are packets proccessed, determine what header is above IPv4 datagram
 void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const u_char* packet) {
 	struct ether_header* eth_h; 		// structure for ethernet frame
 	struct ip* ipv4_h; 					// struct for ipv4 frame
@@ -467,7 +471,6 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 
 	// get info from corresponding header
 	if (ntohs(eth_h->ether_type) == ETHERTYPE_IP) {
-		counter++;
 
 		if (arg->first_packet_time.tv_sec == 0 && arg->first_packet_time.tv_usec == 0) {
 
@@ -504,7 +507,7 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 		process_flow(arg, &flow_tmp);
 
 	} else {
-		//std::cerr << "Unsupported protocol: Something else than IP is above ethernet header" << std::endl;
+		std::cerr << "Unsupported protocol: Something else than IP is above ethernet header" << std::endl;
 	}
 }
 
@@ -521,7 +524,6 @@ int main(int argc, char **argv){
 		my_exit("invalid collector address", 1);
 	}
 
-	//std::cout << args.collector << " " << args.port << " " << args.family << std::endl;
 
 	// read from file
 	handle = pcap_open_offline(args.file.c_str(), errbuf);
@@ -556,13 +558,14 @@ int main(int argc, char **argv){
 		my_exit("Pcap_loop failed", 1);
 	}
 
-	nf_v5_body_t flow_buffer[30];
+	nf_v5_body_t flow_buffer[MAX_FLOWS];
 
+	// export remaining flows in the cache
 	int i = 0;
 	while (args.flow_cache.size() != 0) {
 		flow_buffer[i++] = args.flow_cache.front();
 		args.flow_cache.pop_front();
-		if (i == 30) {
+		if (i == MAX_FLOWS) {
 			send_flow(&args, flow_buffer, i);
 			i = 0;
 			memset(flow_buffer, 0, sizeof(flow_buffer));

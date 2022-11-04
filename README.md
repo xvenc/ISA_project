@@ -31,12 +31,17 @@ Pokud během programu nastala jakákoliv chyba je program ukončen s `návratov�
 
 Pokud je nutné exportovat najednou více flow záznamů. Tak se exportují najednou. Maximální počet takto vyexportovaných flow najednou je 30 podle specifikace. Pro naše účely jsou všechny protokoly kromě `ICMP, UDP a TCP` odfiltrovány. Posledním omezením je, že je možné číst pouze z pcap souborů pakety, které byly zachyceny na ethernetovém rozhraní a jsou zabaleny do ethernet framu. 
 
+## Omezení
+Jsou zpracovávány pouze pakety, které obsahují na linkové vrstvě ethernetové hlavičky s hodnotou 
+`LINKTYPE_ETHERNET`.
+
 ## Příklady spuštění
 
 ```
 $./flow < icmp.pcap
 $./flow -f icmp.pcap -a 60 -i 10 -m 5
-$./flow -f icmp.pcap
+$./flow -f icmp.pcap -c localhost:2055
+$./flow -f icmp.pcap -c [::1]:2055
 $./flow -f tcp.pcap -a 30
 ```
 
