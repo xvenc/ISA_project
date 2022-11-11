@@ -1,3 +1,12 @@
+/*
+ * flow.cpp
+ * Solution for 1. task for ISA 2022/2023
+ * Author: Václav Korvas VUT FIT 3BIT (xkorva03)
+ * Main file to generate NetFlow
+ *
+ */
+
+
 #include <iostream>
 #include <list>
 #include <iterator>
@@ -5,7 +14,6 @@
 #include <string>
 #include <getopt.h>
 
-#define __FAVOR_BSD
 
 #include <pcap/pcap.h>
 #include "netinet/ether.h"
@@ -13,6 +21,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#define __FAVOR_BSD
 #include "netinet/ip_icmp.h"
 #include "netinet/tcp.h"
 #include "netinet/udp.h"
@@ -133,6 +142,7 @@ void parse_arguments(int argc, char** argv, arguments_t* args) {
 			if (*ptr != '\0') {
 				my_exit("Wrong flow-cache size\n",1);	
             }
+			if (args->flow_cache_size <= 0) my_exit("Flow cache size needs to be bigger than 0.", 1);
 	
         }else if (c == '?') my_exit("Wrong program argument\n", EXIT_FAILURE);
 
@@ -215,14 +225,18 @@ int parse_collector(arguments_t *args) {
 				char *ip = (inet_ntoa(ipv4->sin_addr)); 
 				std::string str(ip);
 				args->collector = ip;
-				args->port = check_port(port);
+				if (port != "") {
+					args->port = check_port(port);
+				}
 
 			} else {
 				struct sockaddr_in6 *ipv6 = (struct sockaddr_in6*)result->ai_addr;
 				char ipv6_ip[INET6_ADDRSTRLEN]; // constant taken from arpa/inet.h header file
 				inet_ntop(AF_INET6, &ipv6->sin6_addr,ipv6_ip, INET6_ADDRSTRLEN);
 				args->collector = ipv6_ip;
-				args->port = check_port(port);
+				if (port != "") {
+					args->port = check_port(port);
+				}
 			}
 			freeaddrinfo(result);
 			return 0;
@@ -265,6 +279,8 @@ u_char* prepare_flow(arguments_t* args, nf_v5_body_t flow_buff[], int n_of_flows
 		flow_buff[i].src_as = htons(flow_buff[i].src_as);
 		flow_buff[i].dst_as = htons(flow_buff[i].dst_as);
 		flow_buff[i].end_pad = htons(flow_buff[i].end_pad);
+		if(flow_buff[i].protocol == ICMP_PROTO_N)
+			flow_buff[i].dst_port = htons(flow_buff[i].dst_port);
   	}
 
 	u_char *p = (u_char*)malloc(sizeof(nf_v5_header_t) + sizeof(nf_v5_body_t)*n_of_flows);
@@ -407,7 +423,6 @@ void check_flags(arguments_t *args, nf_v5_body_t *flow) {
 			(i->protocol == flow->protocol) && (i->tos == flow->tos)) {
 			// check if it has tcp fin or rst flags and then export it
 			if (((i->tcp_flags & TH_FIN)) || (flow->tcp_flags & TH_RST)) {
-				//(((i->tcp_flags & TH_FIN) && ((flow->tcp_flags & TH_ACK) && !(flow->tcp_flags & TH_FIN))))
 				flow_buffer[cnt++] = *i;
 				i = args->flow_cache.erase(i);
 				send_flow(args, flow_buffer, cnt);	
@@ -499,7 +514,7 @@ void process_packet(u_char *args, const struct pcap_pkthdr *packet_header, const
 		} else if (ipv4_h->ip_p == ICMP_PROTO_N) {
 			// ICMP
 			flow_tmp.protocol = ICMP_PROTO_N;
-			flow_tmp.dst_port = icmp_h->icmp_type * 256 + icmp_h->icmp_code;
+			flow_tmp.dst_port = (u_int16_t)(icmp_h->icmp_type * 256 + icmp_h->icmp_code);
 	
 		} else return;
 
@@ -523,7 +538,6 @@ int main(int argc, char **argv){
 	if (ret != 0) {
 		my_exit("invalid collector address", 1);
 	}
-
 
 	// read from file
 	handle = pcap_open_offline(args.file.c_str(), errbuf);

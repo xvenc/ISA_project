@@ -3,6 +3,8 @@
 **Jméno a přijmení:** Václav Korvas
 
 **Login:** xkorva03
+
+**Datum vytvoření:** 4.11.2020 
         
 Projekt do předmětu ISA VUT FIT 2022. Generování NetFlow dat ze zadaného vstupního *pcap* souboru nebo z STDIN. Pomocí argumentů příkazové řádky je pak možné specifikovat na jaký kolektor se mají vygenerované NetFlow záznamy posílat. Jde také specifikovat velikost flow-cache, doby za jakou se mají exportovat aktivní a neaktivní záznamy. Zajímají nás pouze pakety *UDP, *TCP* a *ICMP*. Ostatní pakety jsou vyfiltrovány.
 
@@ -30,6 +32,8 @@ Všechny argumenty jsou volitelné a lze je zadávat v libovolném pořadí. Kol
 Pokud během programu nastala jakákoliv chyba je program ukončen s `návratovým kódem 1` a korespondující chybová hláška je vypsána na `stderr`. IP adresu je možné zadat jako IPv4 nebo IPv6 adresu, ovšem pokdu je zadána IPv6 adresa i s portem je zadána nasledujícím způsobem: `[IPv6_adresa]:port` u IPv4 ani u doménového jména žádné takové omezení není. Doménové jméno se zadává ve stylu `www.domain.cz:port`.
 
 Pokud je nutné exportovat najednou více flow záznamů. Tak se exportují najednou. Maximální počet takto vyexportovaných flow najednou je 30 podle specifikace. Pro naše účely jsou všechny protokoly kromě `ICMP, UDP a TCP` odfiltrovány. Posledním omezením je, že je možné číst pouze z pcap souborů pakety, které byly zachyceny na ethernetovém rozhraní a jsou zabaleny do ethernet framu. 
+
+Velikost flow-cache musí být větší než 0. Nemůže tedy být záporná nebo 0.
 
 ## Omezení
 Jsou zpracovávány pouze pakety, které obsahují na linkové vrstvě ethernetové hlavičky s hodnotou 

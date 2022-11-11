@@ -24,7 +24,7 @@ Fakulta informačních technologií}\\
 
 \end{center}
 \Large
-30-10-2022 \hfill Václav Korvas (xkorva03)
+\today \hfill Václav Korvas (xkorva03)
 \end{titlepage}
 
 \tableofcontents
@@ -69,7 +69,7 @@ Po přeložení aplikace ji lze jednodušše spustit pomocí \texttt{./flow <arg
 \\\\ 
 Ovšem pokud není zadán parametr \texttt{-f}, který určuje vstupní pcap soubor, ze kterého se bude číst, tak program bude číst ze standartního vstup neboli z \texttt{STDIN}.  
 U parametru \texttt{-c}, kterým se určuje IPv4 nebo IPv6 adresu kolektoru. Ovšem je nutné při zadávání IPv6 adresy spolu s portem tuto adresu zadat následujícím způsobem: \texttt{[IPv6\_adresa]:port}. U adres IPv4 nebo doménového jména žádná taková omezení nejsou.
-Při zadávaní IPv6 adresy bez portu žádné omezení není a lze ji zadat normálně a není nutné ji dát do hranatých závorek.
+Při zadávaní IPv6 adresy bez portu žádné omezení není a lze ji zadat normálně a není nutné ji dát do hranatých závorek. Poté je nutné zadat velikost flow-cache, která je větší než 0, tedy minimální povolená velikost je 1. 
 \\\\
 Při nevalidním zadání vstupních argumentů končí program s návratovým chybovým kódem \texttt{1} a odpovídající chybovou hláškou.
 \subsection*{Příklady spuštění}
@@ -122,7 +122,6 @@ TCP \cite{TCP}, UDP \cite{UDP} jsou protokoly operující na transportní vrstv�
 Z ICMP \cite{IPV4ICMP} hlavičky, která se nachází za hlavičkou IP, budeme potřebovat informace takzvaný ICMP kód a ICMP typ. Kde ICMP kód určuje o jaký typ se jedná (například echo nebo requst) a kód nám, ještě přesněji specifikuje typ ICMP zprávy.
 Z těchto informací se poté vypočítá číslo, které se uloží jako cílový port a bude tak identifikovat tento tok. Vzorec pro výpočet je následující: \texttt{icmp\_type * 256 + icmp\_code}.
 
-\pagebreak
 \section{Implemtační detaily}
 V následující sekci se popisuje strukturu programu a popisuje řešení některých nejduležitějších částí tohoto projektu.
 V programu je hojně využita knihovna \texttt{pcap} a několik funkcí z této knihovny, jako třeba funkce na čtení pcap souboru nebo funkce
@@ -197,7 +196,7 @@ pcap. Následně byl spuštěn nástroj nfcapd následujícím příkazem: \text
 A poté byl spušten program, kde na vstupu byl vygenerovaný soubor pcap. A nakonec byla komunikace zobrazena pomocí nástroje nfdump: \texttt{nfdump -r logs/2022/*}. Dodatečně bylo ověřeno, že nástroj wireshark zachytil odeslaný paket bez chyby.
 \begin{figure}[H]
 	\begin{center}
-	\scalebox{0.6}{\includegraphics{nfutils.png}}
+	\scalebox{0.5}{\includegraphics{nfutils2.png}}
 	\caption{Ukázka spuštění jednotlivých programů a výstupu nástroje nfdump.}
 	\label{fig:picture1}
 	\end{center}
